@@ -75,4 +75,7 @@ void sr_set_ether_ip(struct sr_instance *, uint32_t);
 void sr_set_ether_addr(struct sr_instance *, const unsigned char *);
 void sr_print_if_list(struct sr_instance *);
 
+/* Functions defined in sr_router.c that other files need */
+void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req);
+
 #endif /* SR_ROUTER_H */
