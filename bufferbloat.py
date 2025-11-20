@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 "CSC458 Fall 2025 Programming Assignment 2: Bufferbloat"
 
-from typing import List
+from typing import List, Tuple
 
 from mininet.topo import Topo
 from mininet.node import CPULimitedHost
@@ -23,6 +23,8 @@ import termcolor as T
 import sys
 import os
 import math
+
+import statistics as stats
 
 # TODO: Don't just read the TODO sections in this code.  Remember that
 # one of the goals of this assignment is for you to learn how to use
@@ -82,6 +84,28 @@ class BBTopo(Topo):
         switch = self.addSwitch("s0")
 
         # TODO: Add links with appropriate characteristics
+        # High-speed access link h1 <-> s0 (non-bottleneck)
+        self.addLink(
+            hosts[0],
+            switch,
+            cls=TCLink,
+            bw=args.bw_host,
+            delay=f"{args.delay}ms",
+            max_queue_size=1000,  # large so it won't be the bottleneck
+            use_htb=True,
+        )
+
+        # Bottleneck link s0 <-> h2 (this is where we place maxq)
+        # We attach the s0 side after the h1 link so s0-eth2 is the bottleneck egress.
+        self.addLink(
+            switch,
+            hosts[1],
+            cls=TCLink,
+            bw=args.bw_net,
+            delay=f"{args.delay}ms",
+            max_queue_size=args.maxq,
+            use_htb=True,
+        )
 
 
 # Simple wrappers around monitoring utilities.  You are welcome to
@@ -123,7 +147,7 @@ def start_qmon(iface: str, interval_sec=0.1, outfile="q.txt") -> Process:
     return monitor
 
 
-def start_iperf(net: Mininet) -> None:
+def start_iperf(net: Mininet) -> Tuple[subprocess.Popen, subprocess.Popen]:
     """Start iperf server and (TODO) client."""
     h2 = net.get("h2")
     print("Starting iperf server...")
@@ -133,6 +157,15 @@ def start_iperf(net: Mininet) -> None:
     server = h2.popen("iperf -s -w 16m")
     # TODO: Start the iperf client on h1.  Ensure that you create a
     # long lived TCP flow. You may need to redirect iperf's stdout to avoid blocking.
+    h1= net.get("h1")
+    iperf_out = os.path.join(args.dir, "iperf_client.txt")
+    # Run for the whole experiment duration (slightly longer to be safe)
+    duration = max(args.time, 10)
+    client = h1.popen(
+        f"iperf -c {h2.IP()} -t {duration} -i 1 -w 16m > {iperf_out} 2>&1",
+        shell=True,
+    )
+    return server, client
 
 
 def start_webserver(net: Mininet) -> List[subprocess.Popen]:
@@ -143,7 +176,7 @@ def start_webserver(net: Mininet) -> List[subprocess.Popen]:
     return [proc]
 
 
-def start_ping(net: Mininet) -> None:
+def start_ping(net: Mininet) -> subprocess.Popen:
     # TODO: Start a ping train from h1 to h2 (or h2 to h1, does it
     # matter?)  Measure RTTs every 0.1 second.  Read the ping man page
     # to see how to do this.
@@ -157,6 +190,13 @@ def start_ping(net: Mininet) -> None:
     h1 = net.get("h1")
     h1.popen(f"echo '' > {os.path.join(args.dir, 'ping.txt')}", shell=True)
 
+    h2 = net.get("h2")
+    ping_out = os.path.join(args.dir, "ping.txt")
+    # -i 0.1: interval; -D: print timestamp; -W 1: 1s timeout; -n: numeric
+    count = int(args.time * 10) + 20
+    cmd = f"ping -n -D -i 0.1 -W 1 -c {count} {h2.IP()} > {ping_out} 2>&1"
+    info(T.colored(f"Starting ping train h1 -> h2 @0.1s, writing {ping_out}\n", "green"))
+    return h1.popen(cmd, shell=True)
 
 def cleanup_processes() -> None:
     """Ensure all spawned processes are terminated."""
@@ -165,6 +205,45 @@ def cleanup_processes() -> None:
         "pgrep -f webserver.py | xargs kill -9 2>/dev/null || true", shell=True
     )
     subprocess.run("pgrep -f iperf | xargs kill -9 2>/dev/null || true", shell=True)
+
+def measure_http_fetch_times(net: Mininet, trials: int = 3) -> List[float]:
+    """
+    From h2, curl the webpage from the webserver on h1.
+    We follow the assignment spec: fetch http://<h1_ip>/http/index.html
+    and record total fetch time reported by curl.
+    """
+    h1, h2 = net.get("h1", "h2")
+
+    # As per assignment: fetch <webserver ip>/http/index.html
+    url = f"http://{h1.IP()}/http/index.html"
+
+    times: List[float] = []
+    http_log = os.path.join(args.dir, "http_times.txt")
+
+    info(f"Measuring HTTP fetch times from h2: {url}\n")
+
+    for i in range(trials):
+        # -o /dev/null: discard body
+        # -s: silent
+        # -w "%{time_total}\n": print only total time in seconds
+        cmd = f'curl -o /dev/null -s -w "%{{time_total}}\\n" "{url}"'
+        output = h2.cmd(cmd)
+
+        try:
+            val = float(output.strip())
+            times.append(val)
+
+            # append to file
+            with open(http_log, "a") as f:
+                f.write(f"{val:.6f}\n")
+
+            info(f"  trial {i+1}: {val:.3f} s\n")
+        except ValueError:
+            info(f"  trial {i+1}: failed to parse curl output: {output}\n")
+
+        sleep(1)
+
+    return times
 
 
 def bufferbloat() -> None:
@@ -195,12 +274,14 @@ def bufferbloat() -> None:
     # Depending on the order you add links to your network, this
     # number may be 1 or 2.  Ensure you use the correct number.
     #
-    # qmon = start_qmon(iface='s0-eth2',
-    #                  outfile='%s/q.txt' % (args.dir))
-    qmon = None
+    qmon = start_qmon(iface='s0-eth2',
+                     outfile='%s/q.txt' % (args.dir))
+    # qmon = None
 
     # TODO: Start iperf, webservers, etc.
     # start_iperf(net)
+    iperf_server, iperf_client = start_iperf(net)
+    web_procs = start_webserver(net)
 
     # Hint: The command below invokes a CLI which you can use to
     # debug.  It allows you to run arbitrary commands inside your
@@ -216,6 +297,7 @@ def bufferbloat() -> None:
     # Hint: have a separate function to do this and you may find the
     # loop below useful.
     start_time = time()
+    _ = measure_http_fetch_times(net, trials=3)
     while True:
         # do the measurement (say) 3 times.
         sleep(1)
@@ -229,9 +311,32 @@ def bufferbloat() -> None:
     # times.  You don't need to plot them.  Just note it in your
     # README and explain.
 
+    http_times_path = os.path.join(args.dir, "http_times.txt")
+    if os.path.exists(http_times_path):
+        with open(http_times_path) as f:
+            vals = [float(x.strip()) for x in f if x.strip()]
+        if vals:
+            mean_v = stats.mean(vals)
+            std_v = stats.pstdev(vals) if len(vals) > 1 else 0.0
+            summary_path = os.path.join(args.dir, "http_summary.txt")
+            with open(summary_path, "w") as f:
+                f.write(f"trials={len(vals)}\nmean={mean_v:.6f}\nstd={std_v:.6f}\n")
+            info(T.colored(f"HTTP fetch mean={mean_v:.3f}s std={std_v:.3f}s\n", "yellow"))
+
     stop_tcpprobe()
     if qmon is not None:
         qmon.terminate()
+
+    try:
+        iperf_server.terminate()
+        iperf_client.terminate()
+    except Exception:
+        pass
+    for p in web_procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
 
     net.stop()
 

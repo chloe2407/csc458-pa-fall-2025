@@ -11,7 +11,7 @@ BW_NET=10
 
 # TODO: If you want the RTT to be 4ms what should the delay on each
 # link be?  Set this value correctly.
-DELAY=1
+DELAY=2
 IPERF_PORT=5001
 
 # Queue sizes to test
