@@ -214,7 +214,7 @@ def measure_http_fetch_times(net: Mininet, trials: int = 3) -> List[float]:
     """
     h1, h2 = net.get("h1", "h2")
 
-    # As per assignment: fetch <webserver ip>/http/index.html
+    # fetch <webserver ip>/http/index.html
     url = f"http://{h1.IP()}/http/index.html"
 
     times: List[float] = []
@@ -263,6 +263,11 @@ def bufferbloat() -> None:
     dumpNodeConnections(net.hosts)
     # This performs a basic all pairs ping test.
     net.pingAll()
+
+    # Uncomment when running with AQM
+    # cmd = f"tc qdisc replace dev s0-eth2 root fq_codel limit {args.maxq}"
+    # print("Installing fq_codel on s0-eth2 with:", cmd)
+    # subprocess.run(cmd, shell=True, check=True)
 
     # Start all the monitoring processes
     start_tcpprobe("cwnd.txt")
