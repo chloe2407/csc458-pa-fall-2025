@@ -8,7 +8,7 @@ echo "Cleaning up experiment files..."
 mn -c
 
 # Remove all output directories
-rm -rf bb-q*
+# rm -rf bb-q*
 rm -rf bb-aqm-q*
 
 # Remove Python cache files
