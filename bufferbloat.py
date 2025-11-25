@@ -265,9 +265,9 @@ def bufferbloat() -> None:
     net.pingAll()
 
     # Uncomment when running with AQM
-    # cmd = f"tc qdisc replace dev s0-eth2 root fq_codel limit {args.maxq}"
-    # print("Installing fq_codel on s0-eth2 with:", cmd)
-    # subprocess.run(cmd, shell=True, check=True)
+    cmd = f"tc qdisc replace dev s0-eth2 root fq_codel limit {args.maxq}"
+    print("Installing fq_codel on s0-eth2 with:", cmd)
+    subprocess.run(cmd, shell=True, check=True)
 
     # Start all the monitoring processes
     start_tcpprobe("cwnd.txt")
