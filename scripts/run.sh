@@ -15,8 +15,8 @@ DELAY=1
 IPERF_PORT=5001
 
 # Queue sizes to test
-QSIZES=(20 100)
-# QSIZES=(10 60)
+# QSIZES=(20 100)
+QSIZES=(10 60)
 # note: run QSIZES=(20) and QSIZES=(100) separately when running with AQM
 # QSIZES=(20)
 # QSIZES=(100)
